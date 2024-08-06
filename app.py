@@ -1,14 +1,15 @@
-
 from flask import Flask, request, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
 import hashlib
 import os
+import jwt
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database';
 db = SQLAlchemy(app)
 app.secret_key = 'secret key'
-
+app.config['JWT_SECRET_KEY'] = 'jwt-secret-key'
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -35,6 +36,24 @@ class Admin(User):
 
 with app.app_context():
     db.create_all()
+
+def create_token(user):
+    payload = {
+        'exp': datetime.utcnow() + timedelta(days=1),
+        'iat': datetime.utcnow(),
+        'sub': user.id,
+        'role': user.role
+    }
+    return jwt.encode(payload, app.config['JWT_SECRET_KEY'], algorithm='HS256')
+
+def parse_token(token):
+    try:
+        payload = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+        return payload['sub'], payload['role']
+    except jwt.ExpiredSignatureError:
+        return None, None
+    except jwt.InvalidTokenError:
+        return None, None
 
 @app.route('/')
 def index():
@@ -70,73 +89,82 @@ def login():
     user = User.query.filter_by(email=email).first()
 
     if user and user.check_password(password):
-        session['email'] = email
-        if user.role == 'admin':
-            return jsonify({'message': 'Admin login successful'})
-        else:
-            return jsonify({'message': 'Login successful'})
+        token = create_token(user)
+        return jsonify({'token': token})
     else:
         return jsonify({'error': 'Invalid user'}), 401
 
 @app.route('/dashboard')
 def dashboard():
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user.role == 'admin':
-            return jsonify({'admin': user.name})
+    token = request.headers.get('Authorization')
+    if token:
+        user_id, role = parse_token(token)
+        if user_id and role:
+            user = User.query.get(user_id)
+            if user:
+                return jsonify({'user': user.name})
+            else:
+                return jsonify({'error': 'User not found'}), 404
         else:
-            return jsonify({'user': user.name})
+            return jsonify({'error': 'Invalid token'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/admin/dashboard')
 def admin_dashboard():
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user.role == 'admin':
-            return jsonify({'admin': user.name})
+    token = request.headers.get('Authorization')
+    if token:
+        user_id, role = parse_token(token)
+        if user_id and role == 'admin':
+            user = User.query.get(user_id)
+            if user:
+                return jsonify({'admin': user.name})
+            else:
+                return jsonify({'error': 'User not found'}), 404
         else:
-            return jsonify({'error': 'Unauthorized'}), 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/logout', methods=['POST'])
 def logout():
-    session.pop('email', None)
     return jsonify({'message': 'Logged out successfully'})
 
 @app.route('/admin/users', methods=['GET'])
 def get_users():
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user.role == 'admin':
+    token = request.headers.get('Authorization')
+    if token:
+        user_id, role = parse_token(token)
+        if user_id and role == 'admin':
             users = User.query.all()
             return jsonify([{'id': u.id, 'name': u.name, 'email': u.email} for u in users])
         else:
-            return jsonify({'error': 'Unauthorized', 'role': user.role}) , 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/admin/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user and user.role == 'admin':
+    token = request.headers.get('Authorization')
+    if token:
+        user_id_token, role = parse_token(token)
+        if user_id_token and role == 'admin':
             u = User.query.get(user_id)
             if u:
                 return jsonify({'id': u.id, 'name': u.name, 'email': u.email})
             else:
                 return jsonify({'error': 'User not found'}), 404
         else:
-            return jsonify({'error': 'Unauthorized'}), 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/admin/users/<int:user_id>', methods=['PUT'])
 def update_user(user_id):
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user and user.role == 'admin':
+    token = request.headers.get('Authorization')
+    if token:
+        user_id_token, role = parse_token(token)
+        if user_id_token and role == 'admin':
             u = User.query.get(user_id)
             if u:
                 data = request.json
@@ -147,15 +175,16 @@ def update_user(user_id):
             else:
                 return jsonify({'error': 'User not found'}), 404
         else:
-            return jsonify({'error': 'Unauthorized'}), 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/admin/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user and user.role == 'admin':
+    token = request.headers.get('Authorization')
+    if token:
+        user_id_token, role = parse_token(token)
+        if user_id_token and role == 'admin':
             u = User.query.get(user_id)
             if u:
                 db.session.delete(u)
@@ -164,24 +193,25 @@ def delete_user(user_id):
             else:
                 return jsonify({'error': 'User not found'}), 404
         else:
-            return jsonify({'error': 'Unauthorized'}), 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 @app.route('/admin/users', methods=['POST'])
 def create_user():
-    if 'email' in session:
-        user = User.query.filter_by(email=session['email']).first()
-        if user and user.role == 'admin':
+    token = request.headers.get('Authorization')
+    if token:
+        user_id_token, role = parse_token(token)
+        if user_id_token and role == 'admin':
             data = request.json
             new_user = User(name=data['name'], email=data['email'], password=data['password'])
             db.session.add(new_user)
             db.session.commit()
             return jsonify({'message': 'User created successfully'})
         else:
-            return jsonify({'error': 'Unauthorized'}), 401
+            return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'No token provided'}), 401
 
 if __name__ == '__main__':
     app.run(debug=True)

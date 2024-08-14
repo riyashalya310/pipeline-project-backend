@@ -54,12 +54,15 @@ def create_token(user):
 
 def parse_token(token):
     try:
+        # Strip 'Bearer' from the token if it exists
+        token = token.replace('Bearer ', '')
         payload = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
         return payload['sub'], payload['role']
     except jwt.ExpiredSignatureError:
         return None, None
     except jwt.InvalidTokenError:
         return None, None
+
 
 @app.route('/')
 def index():
@@ -231,4 +234,4 @@ def create_user():
         return jsonify({'error': 'No token provided'}), 401
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=5001)

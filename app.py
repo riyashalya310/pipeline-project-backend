@@ -50,7 +50,11 @@ def create_token(user):
         'sub': user.id,
         'role': user.role
     }
-    return jwt.encode(payload, app.config['JWT_SECRET_KEY'], algorithm='HS256')
+    # Use decode to ensure the token is a string
+    return jwt.encode(payload, app.config['JWT_SECRET_KEY'], algorithm='HS256').decode('utf-8')
+
+
+
 
 def parse_token(token):
     try:
@@ -109,9 +113,10 @@ def login():
 
     if user and user.check_password(password):
         token = create_token(user)
-        return jsonify({'token': token})
+        return jsonify({'token': token})  # Directly use the token string
     else:
         return jsonify({'error': 'Invalid email or password'}), 401
+
 
 @app.route('/dashboard')
 def dashboard():
@@ -232,6 +237,31 @@ def create_user():
             return jsonify({'error': 'Invalid token or not admin'}), 401
     else:
         return jsonify({'error': 'No token provided'}), 401
+
+
+@app.route('/admin/toggle-role/<int:user_id>', methods=['PUT'])
+def toggle_user_role(user_id):
+    token = request.headers.get('Authorization')
+    if token:
+        user_id_token, role = parse_token(token)
+        if user_id_token and role == 'admin':
+            user = User.query.get(user_id)
+            if user:
+                # Toggle the role between 'admin' and 'user'
+                if user.role == 'admin':
+                    user.role = 'user'
+                else:
+                    user.role = 'admin'
+                
+                db.session.commit()
+                return jsonify({'message': f"User role changed to '{user.role}' successfully.",'user': user.to_dict()})
+            else:
+                return jsonify({'error': 'User not found'}), 404
+        else:
+            return jsonify({'error': 'Invalid token or not admin'}), 401
+    else:
+        return jsonify({'error': 'No token provided'}), 401
+
 
 if __name__ == '__main__':
     app.run(debug=True,port=5001)
